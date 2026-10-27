@@ -1,0 +1,19 @@
+{
+  "name": "chatgpt-model-effort-extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "node --test",
+    "package": "npm run build && node scripts/package.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.3.6",
+    "esbuild": "0.28.2",
+    "fflate": "0.8.3",
+    "jsdom": "29.1.1",
+    "typescript": "7.0.2"
+  }
+}
