@@ -13,6 +13,7 @@
   <p>
     <a href="#installation"><img src="https://img.shields.io/badge/%E5%BC%80%E5%A7%8B%E5%AE%89%E8%A3%85-8952EE?style=for-the-badge" alt="开始安装"></a>
     <a href="#usage"><img src="https://img.shields.io/badge/%E4%BD%BF%E7%94%A8%E6%96%B9%E6%B3%95-3A83F7?style=for-the-badge" alt="使用方法"></a>
+    <a href="README.md"><img src="https://img.shields.io/badge/English-3A83F7?style=for-the-badge" alt="English"></a>
   </p>
   <p>
     <a href="#features">主要功能</a> ·
