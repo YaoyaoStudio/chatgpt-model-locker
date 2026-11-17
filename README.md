@@ -60,9 +60,22 @@ The table lists the versions tested by the maintainer. Other versions have not b
 ## 📦 Installation
 
 1. **Download the extension**: Get the ZIP package from this repository's **Releases** section. **There is no need to extract it.**
-2. **Open the extensions page**: Enter `chrome://extensions/` in Chrome's address bar or `edge://extensions/` in Edge's address bar.
+2. **Open the extensions page**: In the top right, select **More (⋮) → Extensions → Manage extensions** in Chrome, or **Settings and more (…) → Extensions → Manage extensions** in Edge. Alternatively, enter `chrome://extensions/` in Chrome's address bar or `edge://extensions/` in Edge's address bar.
 3. **Install the extension**: Enable **Developer mode**, then **drag the downloaded ZIP package directly onto the extensions page** and wait for installation to finish.
 4. **Open ChatGPT**: Visit or refresh [chatgpt.com](https://chatgpt.com/), sign in, and switch to Chat mode. Once the page is ready, a **floating GPT button** appears in the upper-left corner. Click it to configure the extension.
+
+<details>
+<summary><b>Can't install the ZIP? Load it unpacked</b></summary>
+
+If dragging the ZIP onto the extensions page does not install the extension, load the extracted files instead:
+
+1. Extract the downloaded extension ZIP into a folder you can keep in a fixed location.
+2. Open the extensions page, enable **Developer mode**, and click **Load unpacked**.
+3. Select the **folder that directly contains `manifest.json`**, rather than the file itself, and confirm your selection.
+
+**Keep this folder in place after installation. Do not move or delete it**, because the browser loads the extension files from this location.
+
+</details>
 
 <a id="usage"></a>
 
@@ -100,9 +113,7 @@ The extension leaves the model and reasoning effort unchanged while ChatGPT is g
 <details>
 <summary><b>Updating a locally installed extension</b></summary>
 
-Replace the files in the directory from which you originally loaded the extension, or rebuild the extension if you are using the source code. Then click **Reload** on your browser's extensions page and refresh any open ChatGPT tabs.
-
-Clicking “New chat” within ChatGPT does not load the updated extension scripts.
+Follow the [installation instructions](#installation) to install the new version. If two copies of this extension appear on the extensions page afterward, check their versions and click **Remove** on the older version, keeping only the newly installed version.
 
 </details>
 
