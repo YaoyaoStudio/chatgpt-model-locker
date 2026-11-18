@@ -144,7 +144,8 @@ test("language changes translate current UI and feedback without applying models
       assert.equal(host.lang, value);
       assert.equal(q("[data-role=title]").textContent, MESSAGES[value].settings);
       assert.equal(q("[data-action=refresh]").textContent, MESSAGES[value].refresh);
-      assert.equal(q("[data-role=footer]").textContent, MESSAGES[value].footer);
+      assert.equal(q("[data-role=footer]"), null);
+      assert.ok(q("[data-role=cache-info]").textContent.includes(MESSAGES[value].cacheTime));
       assert.equal(q("[data-preference=follow-browser-language]").parentElement.textContent, MESSAGES[value].followBrowserLanguage);
       assert.equal(host.shadowRoot.activeElement, q("#manual-language-select"));
       assert.ok(q("[data-role=cache-info]").textContent.includes(new Intl.DateTimeFormat(value, { dateStyle: "short", timeStyle: "short" }).format(state.chatCapabilities.lastSuccessfulReadAt)));

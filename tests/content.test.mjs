@@ -17,7 +17,7 @@ async function until(check, diagnose = () => ({}), timeoutMs = 7000) {
   }
 }
 
-function fixture(cached = false, openingDelay = 0, initialPreferences = null, path = "/", { replaceOnFocus = false, replaceTrigger = false, deferOutsideClose = false, timelineHistory = false, retainedPage = false, ignoredOpeningClicks = 0, initialNativeModel = "GPT-6" } = {}) {
+function fixture(cached = false, openingDelay = 0, initialPreferences = null, path = "/", { replaceOnFocus = false, replaceTrigger = false, deferOutsideClose = false, timelineHistory = false, retainedPage = false, ignoredOpeningClicks = 0, initialNativeModel = "GPT-6", restoreFailures = 0, unreadableRestoration = false } = {}) {
   const dom = new JSDOM('<!doctype html><html lang="zh-CN"><body><main><h1>随时可以开始。</h1>' +
     '<div role="textbox" contenteditable="true" aria-label="询问 ChatGPT"></div>' +
     '<button id="trigger" aria-label="选择 ChatGPT 模型" aria-haspopup="menu" aria-expanded="false" aria-controls="native-menu"></button>' +
@@ -34,6 +34,7 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
   let level = 1;
   let clicks = 0;
   let openingAttempts = 0;
+  let restoreAttempts = 0;
   let currentModel = initialNativeModel;
   let openedAt = 0;
   let writes = 0;
@@ -121,8 +122,11 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
     });
     menu.addEventListener("keydown", (event) => {
       if (focusPending || !event.target.matches("[data-reasoning-slider]")) return;
+      const restoring = level === 2 && event.key === "ArrowLeft";
+      if (restoring && ++restoreAttempts <= restoreFailures) return;
       level = Math.max(0, Math.min(2, level + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0)));
       update();
+      if (restoring && unreadableRestoration) menu.querySelector("[role=status]").textContent = "Unreadable slider status";
     });
     document.body.append(menu);
     trigger.setAttribute("aria-expanded", "true");
@@ -156,10 +160,123 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
   window.eval(script);
   return { dom, window, document, get trigger() { return trigger; }, native, get level() { return level; }, get clicks() { return clicks; },
     get openingAttempts() { return openingAttempts; }, get model() { return currentModel; },
+    get restoreAttempts() { return restoreAttempts; },
+    set restoreFailures(value) { restoreFailures = value; },
     get writes() { return writes; }, get state() { return state; },
     shadow: document.querySelector("#chatgpt-default-model-effort-host").shadowRoot,
     close: () => { observers.forEach((observer) => observer.disconnect()); dom.window.close(); } };
 }
+
+test("refresh confirms the original reasoning level, including a successful outer restoration fallback", async (t) => {
+  for (const restoreFailures of [0, 1]) await t.test(`restoration failures: ${restoreFailures}`, async () => {
+    const f = fixture(false, 0, null, "/", { restoreFailures });
+    try {
+      await pause(450);
+      f.shadow.querySelector("[data-role=bubble]").click();
+      f.shadow.querySelector("[data-role=settings-entry]").click();
+      f.shadow.querySelector("[data-action=refresh]").click();
+      await until(() => f.shadow.querySelector("[data-role=status]").textContent === MESSAGES.en.refreshSuccess);
+      assert.equal(f.level, 1);
+      assert.equal(f.restoreAttempts, restoreFailures + 1);
+      assert.equal(f.shadow.querySelector("[data-role=restore-warning]"), null);
+      assert.equal(f.state.chatCapabilities.models[0].efforts.length, 3);
+    } finally { f.close(); }
+  });
+});
+
+test("refresh preserves discovered options but warns on the second hint line when final restoration fails", async (t) => {
+  for (const [history, existingView] of [[false, null], [true, null], [true, "effort"], [true, "models"]]) {
+    await t.test(`${history ? "history" : "new chat"}, prior menu: ${existingView ?? "closed"}`, async () => {
+      const f = fixture(false, 0, null, history ? "/c/restore-failure" : "/", {
+        timelineHistory: history, restoreFailures: Number.POSITIVE_INFINITY
+      });
+      try {
+        await pause(450);
+        f.shadow.querySelector("[data-role=bubble]").click();
+        f.shadow.querySelector("[data-role=settings-entry]").click();
+        if (existingView) {
+          // Exercise native layouts that retain an open portal on toolbar clicks.
+          f.document.querySelector("#chatgpt-default-model-effort-host").addEventListener("click", (event) => event.stopPropagation());
+          f.trigger.click();
+          if (existingView === "models") f.native().querySelector('[aria-label="选择模型"]').click();
+        }
+        f.shadow.querySelector("[data-action=refresh]").click();
+        await until(() => f.shadow.querySelector("[data-role=restore-warning]") &&
+          !f.shadow.querySelector("[data-action=refresh]").disabled, () => ({}), 10000);
+        assert.equal(f.level, 2);
+        assert.equal(f.restoreAttempts, !history || existingView === "effort" ? 2 : 1);
+        assert.equal(f.shadow.querySelector("[data-role=status]").dataset.tone, "warning");
+        assert.equal(f.shadow.querySelector("[data-role=status]").hidden, true);
+        assert.deepEqual(f.shadow.querySelector("[data-role=cache-info]").textContent.split("\n").slice(0, 2),
+          [MESSAGES.en.cacheTime, MESSAGES.en.refreshRestoreFailed]);
+        assert.equal(f.shadow.querySelector("[data-role=cache-info]").textContent.split("\n").length, 3);
+        assert.equal(f.state.chatCapabilities.models[0].efforts.length, 3);
+        assert.ok(f.state.chatCapabilities.lastSuccessfulReadAt > 0);
+        assert.equal(Boolean(f.native()), Boolean(existingView));
+        if (existingView) assert.equal(f.native().dataset.view, existingView);
+        await pause(300);
+        assert.equal(f.shadow.querySelector("[data-role=restore-warning]").textContent, MESSAGES.en.refreshRestoreFailed);
+        assert.notEqual(f.shadow.querySelector("[data-role=status]").textContent, MESSAGES.en.refreshSuccess);
+
+        // A later successful refresh clears the warning without deleting the read timestamp.
+        if (!history) {
+          f.shadow.querySelector('[data-preference="follow-browser-language"]').click();
+          await until(() => f.state.languageSettings?.followBrowser === false);
+          for (const language of [...Object.keys(MESSAGES), "en"]) {
+            const select = f.shadow.querySelector("#manual-language-select");
+            select.value = language;
+            select.dispatchEvent(new f.window.Event("change", { bubbles: true }));
+            await until(() => f.state.languageSettings.manualLanguage === language &&
+              f.shadow.querySelector("[data-role=restore-warning]").textContent === MESSAGES[language].refreshRestoreFailed);
+            assert.equal(f.shadow.querySelector("[data-role=cache-info]").textContent.split("\n")[1],
+              MESSAGES[language].refreshRestoreFailed);
+          }
+          f.restoreFailures = 0;
+          f.shadow.querySelector("[data-action=refresh]").click();
+          assert.equal(f.shadow.querySelector("[data-role=restore-warning]"), null);
+          await until(() => f.shadow.querySelector("[data-role=status]").textContent === MESSAGES.en.refreshSuccess);
+          assert.equal(f.level, 2); // High is the original level for this new probe.
+          assert.equal(f.shadow.querySelector("[data-role=cache-info]").textContent.split("\n").length, 2);
+        }
+      } finally { f.close(); }
+    });
+  }
+});
+
+test("refresh warns when restoring changes the slider but its final state cannot be read", async () => {
+  const f = fixture(false, 0, null, "/", { unreadableRestoration: true });
+  try {
+    await pause(450);
+    f.shadow.querySelector("[data-role=bubble]").click();
+    f.shadow.querySelector("[data-role=settings-entry]").click();
+    f.shadow.querySelector("[data-action=refresh]").click();
+    await until(() => f.shadow.querySelector("[data-role=restore-warning]"), () => ({}), 7000);
+    assert.equal(f.level, 1);
+    assert.equal(f.shadow.querySelector("[data-role=restore-warning]").textContent, MESSAGES.en.refreshRestoreFailed);
+    assert.notEqual(f.shadow.querySelector("[data-role=status]").textContent, MESSAGES.en.refreshSuccess);
+  } finally { f.close(); }
+});
+
+test("probe cancellation does not force a restoration after reply generation begins", async () => {
+  const f = fixture();
+  try {
+    await pause(450);
+    f.document.addEventListener("keydown", (event) => {
+      if (event.key !== "ArrowRight" || f.level !== 2) return;
+      const stop = f.document.createElement("button");
+      stop.setAttribute("aria-label", "停止生成");
+      f.document.querySelector("main").append(stop);
+    });
+    f.shadow.querySelector("[data-role=bubble]").click();
+    f.shadow.querySelector("[data-role=settings-entry]").click();
+    f.shadow.querySelector("[data-action=refresh]").click();
+    await until(() => f.shadow.querySelector("[data-role=status]").textContent === MESSAGES.en.refreshFailed);
+    await pause(200);
+    assert.equal(f.level, 2);
+    assert.equal(f.restoreAttempts, 0);
+    assert.equal(f.shadow.querySelector("[data-role=restore-warning]"), null);
+  } finally { f.close(); }
+});
 
 test("controller passively reads a delayed menu row and updates timestamps without clicks or focus changes", async () => {
   const f = fixture();
@@ -212,6 +329,64 @@ test("controller waits for animated controls, preserves model-only feedback, and
 });
 
 const highPreference = { schemaVersion: 1, modelId: "label:GPT-6", effortByModel: { "label:GPT-6": "label:High" }, autoApply: true };
+
+test("pushState history navigation is detected when only messages change and composer controls are retained", async (t) => {
+  for (const replaceContainer of [false, true]) await t.test(replaceContainer ? "container under wrapper" : "container contents", async () => {
+    const f = fixture(true, 0, { ...highPreference, applyInHistory: true }, "/c/old-chat", { timelineHistory: true });
+    try {
+      await until(() => f.level === 2 && f.native() === null);
+      const composer = f.document.querySelector("[role=textbox]");
+      const trigger = f.trigger;
+      let region = f.document.querySelector("[data-app-action-timeline-scroll]");
+      if (replaceContainer) {
+        const wrapper = f.document.createElement("div");
+        region.replaceWith(wrapper);
+        wrapper.append(region);
+        await pause(250);
+      }
+      const openings = f.openingAttempts;
+      const contents = '<div data-talvt-turn-state="complete"><div data-user-message-bubble="true">Question</div><h4 data-conversation-role="assistant">Answer</h4></div>';
+      region.innerHTML = contents;
+      await pause(600);
+      assert.equal(f.openingAttempts, openings, "message updates within one conversation must not reapply settings");
+      let popstateCount = 0;
+      f.window.addEventListener("popstate", () => { popstateCount += 1; });
+      f.window.history.pushState({}, "", "/c/new-chat");
+      if (replaceContainer) {
+        const next = region.cloneNode(false);
+        next.innerHTML = contents;
+        region.replaceWith(next);
+        region = next;
+      } else {
+        region.innerHTML = contents;
+      }
+      await until(() => f.openingAttempts === openings + 1 && f.native() === null);
+      assert.equal(popstateCount, 0);
+      assert.equal(f.document.querySelector("[role=textbox]"), composer);
+      assert.equal(f.trigger, trigger);
+      await pause(500);
+      assert.equal(f.openingAttempts, openings + 1, "the new conversation should apply only once");
+    } finally { f.close(); }
+  });
+});
+
+test("first-send pushState preserves completed application when the composer is retained", async () => {
+  const f = fixture(true, 0, { ...highPreference, applyInHistory: true });
+  try {
+    await until(() => f.level === 2 && f.native() === null);
+    const openings = f.openingAttempts;
+    const composer = f.document.querySelector("[role=textbox]");
+    f.window.history.pushState({}, "", "/c/first-send");
+    const region = f.document.createElement("div");
+    region.setAttribute("data-app-action-timeline-scroll", "");
+    region.setAttribute("role", "region");
+    region.innerHTML = '<div data-talvt-turn-state="complete"><div data-user-message-bubble="true"></div><h4 data-conversation-role="assistant"></h4></div>';
+    f.document.querySelector("main").append(region);
+    await pause(800);
+    assert.equal(f.document.querySelector("[role=textbox]"), composer);
+    assert.equal(f.openingAttempts, openings);
+  } finally { f.close(); }
+});
 
 test("automatic apply waits for an open native menu to close without reapplying after it has finished", async () => {
   const f = fixture(true, 0, highPreference);

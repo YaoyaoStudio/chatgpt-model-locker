@@ -563,13 +563,14 @@ export class ChatGPTAdapter {
     menu: HTMLElement,
     guard: InteractionGuard,
     timeoutMs = 900
-  ): Promise<EffortOption[] | null> {
+  ): Promise<{ efforts: EffortOption[]; restored: boolean } | null> {
     if (!guard.isCurrent() || !(await this.showEffortControl(menu, guard))) return null;
     const original = this.readEffort(menu);
     if (!original || original.total > 12) return null;
 
     const readings: EffortReading[] = [];
     let completed = false;
+    let restored = false;
     try {
       for (let index = 1; index <= original.total; index += 1) {
         if (!guard.isCurrent()) return null;
@@ -580,23 +581,41 @@ export class ChatGPTAdapter {
       }
       completed = true;
     } finally {
-      if (guard.isCurrent()) {
-        const now = this.readEffort(menu);
-        if (now && now.index !== original.index) await this.setEffortIndex(menu, original.index, guard, timeoutMs);
-      }
+      if (guard.isCurrent()) restored = await this.restoreEffort(menu, original, guard, timeoutMs);
     }
 
     if (!completed || !guard.isCurrent() || readings.length !== original.total) return null;
     const allStrengthOrdered = original.ordered && readings.every((reading) => reading.ordered);
     const hasDistinctNativeIds = readings.every((reading) => reading.nativeId !== null) &&
       new Set(readings.map((reading) => reading.nativeId)).size === readings.length;
-    return readings.map((reading) => ({
+    const efforts: EffortOption[] = readings.map((reading) => ({
       id: hasDistinctNativeIds ? "native:" + reading.nativeId : effortIdFromLabel(reading.label),
       label: reading.label,
       ordering: allStrengthOrdered ? "strength" : "non-ordered",
       order: allStrengthOrdered ? reading.index - 1 : null,
       disabled: false
     }));
+    return { efforts, restored };
+  }
+
+  async restoreEffort(
+    menu: HTMLElement,
+    original: Pick<EffortReading, "index" | "total">,
+    guard: InteractionGuard,
+    timeoutMs = 900
+  ): Promise<boolean> {
+    if (!guard.isCurrent()) return false;
+    try {
+      const now = this.readEffort(menu);
+      if (!now || now.total !== original.total) return false;
+      if (now.index !== original.index) await this.setEffortIndex(menu, original.index, guard, timeoutMs);
+      if (!guard.isCurrent()) return false;
+      // A completed attempt is not evidence of restoration; confirm the actual slider.
+      const restored = this.readEffort(menu);
+      return restored?.index === original.index && restored.total === original.total;
+    } catch {
+      return false;
+    }
   }
 
   toModelCapability(option: ModelMenuOption, efforts: EffortOption[] = []): ModelCapability {

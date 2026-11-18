@@ -12,6 +12,7 @@ import {
   ChatGPTAdapter,
   matchesEffortOption,
   type ChatPageSnapshot,
+  type EffortReading,
   type ModelMenuOption
 } from "./chatgpt-adapter.js";
 import { OperationCancelledError, OperationQueue, type OperationContext, type OperationKind } from "./operation-queue.js";
@@ -38,6 +39,7 @@ const CAPABILITY_SCOPE_HOSTS = new Set(["chatgpt.com", "chat.openai.com"]);
 const NATIVE_ADJUSTMENT_KEYS = new Set(["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Enter", " "]);
 
 type StatusTone = "quiet" | "working" | "success" | "warning";
+type RefreshResult = boolean | "restore-failed";
 
 interface CurrentPageSelection {
   modelId: string;
@@ -90,6 +92,7 @@ class ExtensionController {
   private preferenceSaveGeneration = 0;
   private statusTone: StatusTone = "quiet";
   private toolbarBusy = false;
+  private refreshRestoreWarning = false;
   private statusKey: MessageKey | null = null;
   private statusSelection: { modelLabel: string; effortLabel?: string } | null = null;
   private updateTimer: number | null = null;
@@ -101,7 +104,7 @@ class ExtensionController {
 
   constructor() {
     this.host.id = "chatgpt-default-model-effort-host";
-    this.host.dataset.build = "20261026-automatic-menu-retry-once";
+    this.host.dataset.build = "20261103-confirm-effort-restoration";
     this.host.style.display = "none";
     this.host.style.position = "fixed";
     this.host.style.zIndex = "2147483647";
@@ -163,7 +166,7 @@ class ExtensionController {
     });
 
     this.observer = new MutationObserver((records) => {
-      if (!this.host.isConnected) this.schedulePageUpdate(0);
+      if (!this.host.isConnected || window.location.pathname !== this.pagePath) this.schedulePageUpdate(0);
       else if (records.some((record) => this.mutationMayChangePageState(record))) {
         // Start/cancel the visibility grace period at detection, independently of page debounce.
         this.syncHostVisibility();
@@ -212,7 +215,7 @@ class ExtensionController {
     return "<style>" +
       ":host{all:initial;--extension-accent:#10a37f;--extension-accent-text:#0d866b;--extension-on-accent:#ffffff;color:#202123;font:13px/1.45 system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}" +
       "*{box-sizing:border-box}.bubble{width:46px;height:46px;border:1px solid #ffffff88;border-radius:50%;background:#202123;color:white;opacity:.58;box-shadow:0 3px 14px #0003;cursor:pointer;transition:opacity .15s,transform .15s;font-weight:700;font-size:12px;letter-spacing:-.4px}.bubble:hover,.bubble:focus-visible{opacity:1;transform:scale(1.04);outline:2px solid var(--extension-accent);outline-offset:2px}" +
-      ".panel{position:absolute;top:54px;left:0;width:min(328px,calc(100vw - 24px));max-height:min(74vh,640px);overflow:auto;border:1px solid #0002;border-radius:14px;background:#fff;color:#202123;box-shadow:0 12px 40px #0003;padding:14px;display:none}.panel[data-open='true']{display:block}.head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.title{font-size:15px;font-weight:650}.close{border:0;background:transparent;color:#666;font-size:20px;line-height:1;cursor:pointer}.field{display:grid;gap:6px;margin:12px 0}.label{font-size:12px;font-weight:600;color:#444}.select{width:100%;min-height:38px;border:1px solid #0002;border-radius:9px;background:#fff;padding:7px 9px;color:inherit;font:inherit}#default-model-select{width:calc(100% - 20px)}.toolbar{display:flex;gap:8px;align-items:center;margin-top:14px}.button{border:1px solid #0002;border-radius:9px;padding:8px 10px;background:#fff;color:inherit;font:inherit;cursor:pointer}.button.primary{background:var(--extension-accent);color:var(--extension-on-accent);border-color:var(--extension-accent)}.button:disabled{opacity:.6;cursor:wait}.toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:14px 0;width:calc(100% - 20px)}.toggle{position:relative;flex:none;width:28px;height:16px;margin:0;padding:0;border:0;border-radius:999px;appearance:none;-webkit-appearance:none;background:#b0b0b0;cursor:pointer;transition:background-color 150ms ease}.toggle:before{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0002;transition:transform 150ms cubic-bezier(.2,.8,.2,1)}.toggle:checked{background:var(--extension-accent)}.toggle:checked:before{transform:translateX(12px)}.toggle:focus-visible{outline:2px solid var(--extension-accent);outline-offset:3px}.hint{color:#6b6b6b;font-size:11px;margin-top:5px}.hint.cache-info{font-size:9px;line-height:1.35;margin-top:4px}.status{margin-top:8px;min-height:14px;color:#646464;font-size:9px;line-height:1.35}.status[data-tone='success']{color:#13795b}.status[data-tone='warning']{color:#a15c00}.status[data-tone='working']{color:#555}.empty{border-radius:9px;background:#f6f6f6;padding:10px;color:#666;font-size:12px}.footer{border-top:1px solid #0001;margin-top:8px;padding-top:6px;color:#777;font-size:9px;line-height:1.35}" +
+      ".panel{position:absolute;top:54px;left:0;width:min(328px,calc(100vw - 24px));max-height:min(74vh,640px);overflow:auto;border:1px solid #0002;border-radius:14px;background:#fff;color:#202123;box-shadow:0 12px 40px #0003;padding:14px;display:none}.panel[data-open='true']{display:block}.head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:12px}.title{font-size:15px;font-weight:650}.close{border:0;background:transparent;color:#666;font-size:20px;line-height:1;cursor:pointer}.field{display:grid;gap:6px;margin:12px 0}.label{font-size:12px;font-weight:600;color:#444}.select{width:100%;min-height:38px;border:1px solid #0002;border-radius:9px;background:#fff;padding:7px 9px;color:inherit;font:inherit}#default-model-select{width:calc(100% - 20px)}.toolbar{display:flex;gap:8px;align-items:center;margin-top:14px}.button{border:1px solid #0002;border-radius:9px;padding:8px 10px;background:#fff;color:inherit;font:inherit;cursor:pointer}.button.primary{background:var(--extension-accent);color:var(--extension-on-accent);border-color:var(--extension-accent)}.button:disabled{opacity:.6;cursor:wait}.toggle-row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:14px 0;width:calc(100% - 20px)}.toggle{position:relative;flex:none;width:28px;height:16px;margin:0;padding:0;border:0;border-radius:999px;appearance:none;-webkit-appearance:none;background:#b0b0b0;cursor:pointer;transition:background-color 150ms ease}.toggle:before{content:'';position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:#fff;box-shadow:0 1px 2px #0002;transition:transform 150ms cubic-bezier(.2,.8,.2,1)}.toggle:checked{background:var(--extension-accent)}.toggle:checked:before{transform:translateX(12px)}.toggle:focus-visible{outline:2px solid var(--extension-accent);outline-offset:3px}.hint{color:#6b6b6b;font-size:11px;margin-top:5px}.hint.cache-info{font-size:9px;line-height:1.35;margin-top:4px}.status{margin-top:8px;min-height:14px;color:#646464;font-size:9px;line-height:1.35}.status[data-tone='success']{color:#13795b}.status[data-tone='warning']{color:#a15c00}.status[data-tone='working']{color:#555}.empty{border-radius:9px;background:#f6f6f6;padding:10px;color:#666;font-size:12px}" +
       ".effort-card{--effort-accent:var(--extension-accent);--effort-rest:color-mix(in srgb,var(--extension-accent) 18%,#fff);width:calc(100% - 20px);display:grid;gap:12px;padding:11px 12px 12px;border:1px solid #dedee3;border-radius:18px;background:#fff;box-shadow:0 4px 12px #00000005}.range-value{display:block;min-width:0;text-align:center;font-size:16px;line-height:1.35;font-weight:600;color:var(--extension-accent-text)}.range-shell{position:relative;height:32px;min-width:0}.range-track{position:absolute;inset:4px 0;height:24px;border-radius:999px;background:var(--effort-rest);overflow:hidden;pointer-events:none}.range-fill{position:absolute;inset:0 auto 0 0;width:var(--range-progress);border-radius:inherit;background:var(--effort-accent);transition:width 220ms cubic-bezier(.2,.8,.2,1)}.range-dots{position:absolute;inset:0 14px}.range-dot{position:absolute;top:50%;width:4px;height:4px;border-radius:50%;background:color-mix(in srgb,var(--effort-accent) 55%,var(--effort-rest));transform:translate(-50%,-50%);transition:background-color 160ms ease,transform 150ms ease}.range-dot[data-passed='true']{background:#ffffff65}.range-dot[data-hovered='true']{transform:translate(-50%,-50%) scale(1.5)}" +
       ".range-thumb{position:absolute;z-index:1;top:50%;left:var(--range-progress);width:28px;height:28px;border:1px solid #e1e1e6;border-radius:50%;background:#fff;box-shadow:0 1px 4px #00000012;transform:translate(-50%,-50%);pointer-events:none;transition:left 220ms cubic-bezier(.2,.8,.2,1),transform 150ms ease}.effort-card:hover .range-thumb,.effort-card:has(.range:focus-visible) .range-thumb{transform:translate(-50%,-50%) scale(1.08)}.range{position:absolute;z-index:2;inset:0;width:100%;height:32px;margin:0;padding:0;appearance:none;-webkit-appearance:none;background:transparent;cursor:pointer;border:0;border-radius:999px;outline:none}.range::-webkit-slider-runnable-track{height:24px;border:0;border-radius:999px;background:transparent}.range::-webkit-slider-thumb{appearance:none;-webkit-appearance:none;box-sizing:border-box;width:28px;height:28px;margin-top:-2px;border:0;border-radius:50%;background:transparent}.range::-moz-range-track{height:24px;border:0;border-radius:999px;background:transparent}.range::-moz-range-thumb{box-sizing:border-box;width:28px;height:28px;border:0;border-radius:50%;background:transparent}.range:focus-visible{outline:2px solid var(--effort-accent);outline-offset:3px}@media(prefers-reduced-motion:reduce){.range-thumb,.range-fill,.range-dot,.toggle,.toggle:before{transition:none}}" +
       ".model-picker{position:relative;width:calc(100% - 20px);min-width:0}.model-picker #default-model-select{display:block;width:100%;padding-right:36px;appearance:none;-webkit-appearance:none;pointer-events:none}.model-trigger{position:absolute;inset:0;display:flex;align-items:center;justify-content:flex-end;width:100%;padding:0 11px;border:0;border-radius:9px;background:transparent;color:inherit;cursor:pointer}.model-trigger:focus-visible{outline:2px solid var(--extension-accent);outline-offset:2px}.model-chevron{display:block;flex:none;width:16px;height:16px;color:inherit}.visually-hidden{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap;border:0}" +
@@ -220,12 +223,13 @@ class ExtensionController {
       ".model-menu{position:fixed;inset:auto;margin:0;padding:3px;min-width:0;border:1px solid #c9c9ce;border-radius:16px;background:#fff;color:#202123;box-shadow:0 6px 18px #0000000d;font:inherit;overflow:auto;overscroll-behavior:contain;opacity:0;transform:translateY(-4px);transition:opacity 140ms ease-out,transform 140ms ease-out}.model-menu:popover-open{opacity:1;transform:translateY(0)}@starting-style{.model-menu:popover-open{opacity:0;transform:translateY(-4px)}}.model-option{display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;min-height:38px;padding:9px 11px;border:0;border-radius:12px;background:transparent;color:inherit;text-align:left;font:inherit;font-size:14px;line-height:1.4;cursor:pointer}.model-option:hover:not(:disabled),.model-option:focus-visible{background:#f4f4f5;outline:none}.model-option:disabled{opacity:.45;cursor:not-allowed}.model-name{min-width:0;overflow-wrap:anywhere}.model-check{display:inline-flex;flex:none;align-items:center;justify-content:center;width:18px;height:18px;color:#555;visibility:hidden}.model-check svg{display:block;width:18px;height:18px}.model-option[aria-selected='true'] .model-check{visibility:visible}" +
       ".hint{white-space:pre-line}[hidden]{display:none!important}.head-title{display:flex;align-items:center;gap:6px;min-width:0}.back{display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;margin-left:-4px;padding:4px;border:0;border-radius:8px;background:transparent;color:inherit;cursor:pointer}.back svg{display:block;width:20px;height:20px}.back:hover{background:#f2f2f4}.back:focus-visible,.settings-card:focus-visible{outline:2px solid var(--extension-accent);outline-offset:3px}.settings-card{display:flex;align-items:center;gap:10px;width:calc(100% - 20px);min-height:50px;margin:14px 0 0;padding:12px;border:1px solid #dedee3;border-radius:18px;background:#fff;color:inherit;box-shadow:0 4px 12px #00000005;text-align:left;font:inherit;font-size:13px;font-weight:600;cursor:pointer;transition:background-color 150ms ease,border-color 150ms ease}.settings-card:hover{background:#f6f6f8;border-color:#cfcfd6}.settings-icon{display:block;flex:none;width:22px;height:22px}.settings-card-label{flex:1;min-width:0}.settings-arrow{display:block;flex:none;width:16px;height:16px;color:#8b8b90}@media(prefers-reduced-motion:reduce){.settings-card{transition:none}}@media(prefers-color-scheme:dark){.settings-card{background:#303136;border-color:#ffffff22;box-shadow:none}.settings-card:hover,.back:hover{background:#3c3d42}.settings-card:hover{border-color:#ffffff38}.settings-arrow{color:#aaa}}" +
       ".bubble{position:relative}.bubble:after{content:'';position:absolute;right:3px;top:3px;width:8px;height:8px;border-radius:50%;background:#a0a0a0;border:1px solid #fff}.bubble[data-tone='success']:after{background:#24b47e}.bubble[data-tone='working']:after{background:#f3b340}.bubble[data-tone='warning']:after{background:#e55353}" +
-      "@media(prefers-reduced-motion:reduce){.model-menu{transition:none}}@media(prefers-color-scheme:dark){.panel{background:#292a2d;color:#f4f4f4;border-color:#ffffff20}.label,.close{color:#ddd}.select,.button,.language-trigger{background:#343539;color:#f4f4f4;border-color:#ffffff22}.model-menu{background:#303136;color:#f4f4f4;border-color:#ffffff30}.model-option:hover:not(:disabled),.model-option:focus-visible{background:#3c3d42}.model-check{color:#ddd}.toggle{background:#686a73}.effort-card{--effort-rest:color-mix(in srgb,var(--extension-accent) 24%,#303136);background:#303136;border-color:#ffffff22;box-shadow:none}.empty{background:#343539;color:#bbb}.footer{border-color:#ffffff18}.hint,.status{color:#aaa}.status[data-tone='success']{color:#65c99b}.status[data-tone='warning']{color:#f2bc68}}" + EFFORT_EFFECTS_CSS + "</style>" +
+      ".restore-warning{color:#a15c00}@media(prefers-color-scheme:dark){.restore-warning{color:#f2bc68}}" +
+      "@media(prefers-reduced-motion:reduce){.model-menu{transition:none}}@media(prefers-color-scheme:dark){.panel{background:#292a2d;color:#f4f4f4;border-color:#ffffff20}.label,.close{color:#ddd}.select,.button,.language-trigger{background:#343539;color:#f4f4f4;border-color:#ffffff22}.model-menu{background:#303136;color:#f4f4f4;border-color:#ffffff30}.model-option:hover:not(:disabled),.model-option:focus-visible{background:#3c3d42}.model-check{color:#ddd}.toggle{background:#686a73}.effort-card{--effort-rest:color-mix(in srgb,var(--extension-accent) 24%,#303136);background:#303136;border-color:#ffffff22;box-shadow:none}.empty{background:#343539;color:#bbb}.hint,.status{color:#aaa}.status[data-tone='success']{color:#65c99b}.status[data-tone='warning']{color:#f2bc68}}" + EFFORT_EFFECTS_CSS + "</style>" +
       "<button class='bubble' data-role='bubble' type='button' aria-label='设置默认模型与推理强度' title='默认模型与推理强度'>GPT</button>" +
       "<section class='panel' data-role='panel' data-open='false' aria-label='默认模型与推理强度设置' aria-hidden='true'>" +
       "<div class='head'><div class='head-title'><button class='back' type='button' data-action='back' hidden aria-label='返回'><svg viewBox='0 0 20 20' fill='none' stroke='currentColor' stroke-width='1.7' stroke-linecap='round' stroke-linejoin='round' aria-hidden='true' focusable='false'><path d='m12.5 4.5-5.5 5.5 5.5 5.5'/></svg></button><div class='title' data-role='title'></div></div><button class='close' type='button' data-action='close' aria-label='关闭'>×</button></div>" +
       "<div data-role='panel-body'></div><div data-role='settings-feedback' hidden><div class='status' data-role='status' role='status' aria-live='polite'></div>" +
-      "<div class='footer' data-role='footer'></div></div></section>";
+      "</div></section>";
   }
 
   private async initializeStorage(): Promise<void> {
@@ -360,9 +364,7 @@ class ExtensionController {
   private renderPanel(forceBody = false): void {
     const copy = this.copy();
     const title = this.shadow.querySelector<HTMLElement>("[data-role='title']");
-    const footer = this.shadow.querySelector<HTMLElement>("[data-role='footer']");
     if (title) title.textContent = this.panelView === "settings" ? copy.settings : copy.title;
-    if (footer) footer.textContent = copy.footer;
     this.panel.setAttribute("aria-label", this.panelView === "settings" ? copy.settings : copy.title);
     this.panel.querySelector("[data-action='back']")?.setAttribute("aria-label", copy.back);
     this.panel.querySelector("[data-action='close']")?.setAttribute("aria-label", copy.close);
@@ -395,7 +397,9 @@ class ExtensionController {
     this.panelBody.querySelectorAll<HTMLButtonElement>(".toolbar button[data-action]").forEach((button) => {
       button.disabled = this.toolbarBusy;
     });
-    this.statusLine.textContent = this.statusMessage || (this.storageReady ? "" : copy.refreshWorking);
+    this.statusLine.hidden = this.refreshRestoreWarning && this.statusKey === "refreshRestoreFailed";
+    this.statusLine.textContent = this.statusLine.hidden ? ""
+      : this.statusMessage || (this.storageReady ? "" : copy.refreshWorking);
     this.statusLine.dataset.tone = this.statusTone;
     this.syncPanelView();
     this.syncEffortEffectsVisibility();
@@ -588,8 +592,22 @@ class ExtensionController {
         dateStyle: "short",
         timeStyle: "short"
       }).format(capabilities.lastSuccessfulReadAt);
-    hint.textContent = [copy.cacheTime, lastRead].join("\n");
+    this.updateCacheInfo(hint, copy, lastRead);
     settingsView.append(hint);
+  }
+
+  private updateCacheInfo(hint: HTMLElement, copy: Record<string, string>, lastRead: string): void {
+    const lines = [copy.cacheTime, ...(this.refreshRestoreWarning ? [copy.refreshRestoreFailed] : []), lastRead];
+    if (hint.textContent === lines.join("\n")) return;
+    hint.replaceChildren(document.createTextNode(copy.cacheTime + "\n"));
+    if (this.refreshRestoreWarning) {
+      const warning = this.make("span", "restore-warning");
+      warning.dataset.role = "restore-warning";
+      warning.setAttribute("role", "status");
+      warning.textContent = copy.refreshRestoreFailed;
+      hint.append(warning, "\n");
+    }
+    hint.append(lastRead);
   }
 
   private createSettingsEntry(copy: Record<string, string>): HTMLButtonElement {
@@ -649,7 +667,7 @@ class ExtensionController {
         : copy.lastRead + new Intl.DateTimeFormat(this.uiLanguage(), {
           dateStyle: "short", timeStyle: "short"
         }).format(capabilities.lastSuccessfulReadAt);
-      cacheInfo.textContent = [copy.cacheTime, lastRead].join("\n");
+      this.updateCacheInfo(cacheInfo, copy, lastRead);
     }
     const range = this.panelBody.querySelector<HTMLInputElement>("[data-preference='effort-range']");
     if (!range || this.pendingRange === range) return;
@@ -1682,13 +1700,13 @@ class ExtensionController {
       if ((!cached || cached.effortState === "not-read" || cached.effortState === "unknown") && targetOption &&
         selectedBeforeDiscovery.length === 1 && selectedBeforeDiscovery[0].id === targetId) {
         this.host.dataset.step = "discover-efforts";
-        const efforts = await attempt(() => this.adapter.enumerateEfforts(menu, context, REFRESH_TIMEOUT_MS));
+        const discovery = await attempt(() => this.adapter.enumerateEfforts(menu, context, REFRESH_TIMEOUT_MS));
         if (!context.isCurrent()) return false;
-        if (efforts) {
+        if (discovery) {
           const merged = await attempt(() => mergeAndSaveCapabilities({
             scopeKey: this.adapter.scopeKey(),
             completeness: "partial",
-            models: [this.adapter.toModelCapability(targetOption, efforts)]
+            models: [this.adapter.toModelCapability(targetOption, discovery.efforts)]
           }, context.isCurrent));
           if (!context.isCurrent()) return false;
           if (merged) {
@@ -1769,13 +1787,21 @@ class ExtensionController {
       context = this.chatOperationContext(context);
       if (!context.isCurrent()) return false;
       const visibleProgress = priority === "user";
-      if (visibleProgress) this.setStatus("working", "refreshWorking");
+      if (visibleProgress) {
+        this.refreshRestoreWarning = false;
+        this.setStatus("working", "refreshWorking");
+      }
       try {
         const refreshed = await this.refreshFromPage(context, allowSwitch);
         if (visibleProgress && context.isCurrent()) {
-          this.setStatus(refreshed ? "success" : "warning", refreshed ? "refreshSuccess" : "refreshFailed");
+          if (refreshed === "restore-failed") {
+            this.refreshRestoreWarning = true;
+            this.setStatus("warning", "refreshRestoreFailed");
+          } else {
+            this.setStatus(refreshed ? "success" : "warning", refreshed ? "refreshSuccess" : "refreshFailed");
+          }
         }
-        return refreshed;
+        return refreshed === true;
       } catch {
         if (visibleProgress && context.isCurrent()) this.setStatus("warning", "refreshFailed");
         return false;
@@ -1783,7 +1809,7 @@ class ExtensionController {
     });
   }
 
-  private async refreshFromPage(context: OperationContext, allowSwitch: boolean): Promise<boolean> {
+  private async refreshFromPage(context: OperationContext, allowSwitch: boolean): Promise<RefreshResult> {
     if (allowSwitch) context = this.nativeInteractionContext(context);
     if (allowSwitch && !(await this.adapter.settlePageInput(context))) return false;
     if (!context.isCurrent()) return false;
@@ -1810,7 +1836,8 @@ class ExtensionController {
     }
 
     let originalModel: ModelMenuOption | null = null;
-    let originalEffort: number | null = null;
+    let originalEffort: EffortReading | null = null;
+    let restored = true;
     let resultSnapshot: CapabilitiesSnapshot | null = null;
     try {
       if (!(await this.adapter.showModelList(menu, context))) return false;
@@ -1825,7 +1852,7 @@ class ExtensionController {
 
       if (!(await this.switchNativeModel(menu, originalModel.id, context))) return false;
       const originalReading = this.adapter.readEffort(menu);
-      if (originalReading) originalEffort = originalReading.index;
+      originalEffort = originalReading;
       this.currentPageSelection = {
         modelId: originalModel.id,
         modelLabel: originalModel.label,
@@ -1833,9 +1860,9 @@ class ExtensionController {
       };
 
       if (originalReading && originalModel.availability === "available") {
-        const efforts = await this.adapter.enumerateEfforts(menu, context, REFRESH_TIMEOUT_MS);
-        if (efforts && context.isCurrent()) {
-          observed.set(originalModel.id, this.adapter.toModelCapability(originalModel, efforts));
+        const discovery = await this.adapter.enumerateEfforts(menu, context, REFRESH_TIMEOUT_MS);
+        if (discovery && context.isCurrent()) {
+          observed.set(originalModel.id, this.adapter.toModelCapability(originalModel, discovery.efforts));
         }
       }
 
@@ -1847,8 +1874,14 @@ class ExtensionController {
     } finally {
       if (context.isCurrent()) {
         if (originalModel) {
-          await this.switchNativeModel(menu, originalModel.id, context);
-          if (originalEffort !== null) await this.adapter.setEffortIndex(menu, originalEffort, context, REFRESH_TIMEOUT_MS);
+          const selected = await this.switchNativeModel(menu, originalModel.id, context);
+          if (originalEffort !== null) {
+            restored = selected && await this.adapter.restoreEffort(menu, originalEffort, context, REFRESH_TIMEOUT_MS);
+            const reading = this.adapter.readEffort(menu);
+            this.currentPageSelection = {
+              modelId: originalModel.id, modelLabel: originalModel.label, effortLabel: reading?.label ?? null
+            };
+          }
         }
         if (!context.isCurrent()) return false;
         if (allowSwitch && !menuWasOpen) this.closeMenu(trigger, menu);
@@ -1861,17 +1894,19 @@ class ExtensionController {
     if (!merged || !context.isCurrent()) return false;
     this.capabilities = merged;
     this.renderPanel();
-    return this.capabilities.models.length > 0;
+    return restored ? this.capabilities.models.length > 0 : "restore-failed";
   }
 
   private async refreshHistoryMenu(
     context: OperationContext,
     trigger: HTMLElement
-  ): Promise<boolean> {
+  ): Promise<RefreshResult> {
     const wasOpen = trigger.getAttribute("aria-expanded") === "true";
     const previousMenu = wasOpen ? this.adapter.findMenu(trigger) : null;
     const previousView = previousMenu ? this.adapter.menuView(previousMenu) : "unknown";
-    let originalEffort: number | null = null;
+    let originalEffort: EffortReading | null = null;
+    let restored = true;
+    let snapshot: CapabilitiesSnapshot | null = null;
     const menu = await this.adapter.ensureMenuOpen(trigger, context, MENU_OPEN_TIMEOUT_MS);
     if (!menu || !context.isCurrent() || this.adapter.replyGenerationState(this.currentSnapshot) !== "idle") return false;
     try {
@@ -1886,16 +1921,23 @@ class ExtensionController {
         await this.switchNativeModel(menu, currentModel.id, context)) {
         const reading = this.adapter.readEffort(menu);
         if (reading) {
-          originalEffort = reading.index;
+          originalEffort = reading;
           this.currentPageSelection = {
             modelId: currentModel.id,
             modelLabel: currentOption.label,
             effortLabel: reading.label
           };
-          const efforts = await this.adapter.enumerateEfforts(menu, context, REFRESH_TIMEOUT_MS);
-          if (efforts && context.isCurrent() && this.adapter.replyGenerationState(this.currentSnapshot) === "idle") {
+          const discovery = await this.adapter.enumerateEfforts(menu, context, REFRESH_TIMEOUT_MS);
+          if (context.isCurrent()) {
+            const after = this.adapter.readEffort(menu);
+            restored = discovery?.restored ?? (after?.index === reading.index && after.total === reading.total);
+            this.currentPageSelection = {
+              modelId: currentModel.id, modelLabel: currentOption.label, effortLabel: after?.label ?? null
+            };
+          }
+          if (discovery && context.isCurrent() && this.adapter.replyGenerationState(this.currentSnapshot) === "idle") {
             const index = observedModels.findIndex((model) => model.id === currentModel.id);
-            if (index >= 0) observedModels[index] = this.adapter.toModelCapability(currentOption, efforts);
+            if (index >= 0) observedModels[index] = this.adapter.toModelCapability(currentOption, discovery.efforts);
           }
         }
       } else if (currentModel && currentOption) {
@@ -1906,16 +1948,11 @@ class ExtensionController {
         };
       }
 
-      const snapshot: CapabilitiesSnapshot = {
+      snapshot = {
         scopeKey: this.adapter.scopeKey(),
         completeness: "partial",
         models: observedModels
       };
-      const merged = await mergeAndSaveCapabilities(snapshot, context.isCurrent);
-      if (!merged || !context.isCurrent()) return false;
-      this.capabilities = merged;
-      this.renderPanel();
-      return this.capabilities.models.length > 0;
     } finally {
       if (context.isCurrent() && !wasOpen) {
         this.closeMenu(trigger, menu);
@@ -1923,13 +1960,25 @@ class ExtensionController {
         const selected = await this.ensureModelsView(menu, context);
         const current = selected ? this.adapter.currentModel(selected) : null;
         if (current) {
-          await this.switchNativeModel(menu, current.id, context);
-          if (originalEffort !== null) await this.adapter.setEffortIndex(menu, originalEffort, context, REFRESH_TIMEOUT_MS);
+          const selectedModel = await this.switchNativeModel(menu, current.id, context);
+          if (originalEffort !== null) {
+            restored = selectedModel && await this.adapter.restoreEffort(menu, originalEffort, context, REFRESH_TIMEOUT_MS);
+            const reading = this.adapter.readEffort(menu);
+            this.currentPageSelection = {
+              modelId: current.id, modelLabel: current.label, effortLabel: reading?.label ?? null
+            };
+          }
         }
       } else if (context.isCurrent() && previousView === "models") {
         await this.adapter.showModelList(menu, context);
       }
     }
+    if (!snapshot || !context.isCurrent()) return false;
+    const merged = await mergeAndSaveCapabilities(snapshot, context.isCurrent);
+    if (!merged || !context.isCurrent()) return false;
+    this.capabilities = merged;
+    this.renderPanel();
+    return restored ? this.capabilities.models.length > 0 : "restore-failed";
   }
 
   private async readExistingElements(

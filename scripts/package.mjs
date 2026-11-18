@@ -25,6 +25,6 @@ await addDirectory(distributionDirectory);
 if (!entries["manifest.json"]) throw new Error("Build output is missing root manifest.json.");
 
 await mkdir(releaseDirectory, { recursive: true });
-const archivePath = join(releaseDirectory, `chatgpt-model-effort-${packageJson.version}.zip`);
+const archivePath = join(releaseDirectory, `${packageJson.name}-${packageJson.version}.zip`);
 await writeFile(archivePath, zipSync(entries, { level: 9 }));
 process.stdout.write(`Created ${archivePath}\n`);
