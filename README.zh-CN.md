@@ -5,7 +5,7 @@
   <h1>GPT模型锁定器</h1>
   <p><strong>锁定你最喜欢的模型，以免每次打开GPT时手动调整</strong></p>
   <p>
-    <a href="#development"><img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-v0.1.0-8952EE?style=flat-square" alt="版本 v0.1.0"></a>
+    <a href="#development"><img src="https://img.shields.io/badge/%E7%89%88%E6%9C%AC-v0.1.2-8952EE?style=flat-square" alt="版本 v0.1.2"></a>
     <a href="#compatibility"><img src="https://img.shields.io/badge/%E6%B5%8F%E8%A7%88%E5%99%A8-Chrome%20%26%20Edge-3A83F7?style=flat-square" alt="支持 Chrome 和 Edge"></a>
     <a href="#privacy"><img src="https://img.shields.io/badge/%E6%95%B0%E6%8D%AE-%E6%9C%AC%E5%9C%B0%E4%BF%9D%E5%AD%98-238636?style=flat-square" alt="数据本地保存"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT 许可证"></a>
@@ -153,7 +153,7 @@ npm run build
 | `npm run check` | TypeScript 类型检查。 |
 | `npm test` | 自动化测试。 |
 | `npm run build` | 类型检查并生成浏览器可加载的 `dist/`。 |
-| `npm run package` | 重新构建，并生成 `release/chatgpt-model-effort-<版本号>.zip`。 |
+| `npm run package` | 重新构建，并生成 `release/chatgpt-model-locker-<版本号>.zip`。 |
 
 `dist/` 和 `release/` 是生成目录，不随源码提交。安装 ZIP 的根层包含 `manifest.json`。
 

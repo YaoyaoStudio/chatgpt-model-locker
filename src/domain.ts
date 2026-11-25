@@ -78,6 +78,11 @@ export function preferencesEqual(left: Preferences, right: Preferences): boolean
   return [...modelIds].every((id) => (left.effortByModel[id] ?? null) === (right.effortByModel[id] ?? null));
 }
 
+/** Recover the legacy ID generated from the known GPT-5.6 Sol retirement notice. */
+export function canonicalModelId(id: string): string {
+  return id.replace(/^(label:GPT-5\.6 Sol) (?:将于|將於)\s*\d{1,2}月\s*\d{1,2}日\s*(?:下线|下線)$/u, "$1");
+}
+
 /** Compare capability data without treating a repeated observation's timestamp as new data. */
 export function capabilityDataEqual(left: CapabilitiesCache, right: CapabilitiesCache): boolean {
   return left.schemaVersion === right.schemaVersion && left.scopeKey === right.scopeKey &&
@@ -118,12 +123,19 @@ export function readPreferences(raw: unknown): StoredValue<Preferences> {
     }
     safeEfforts[model] = effort;
   }
+  const selectedId = modelId === null ? null : canonicalModelId(modelId);
+  for (const [id, effort] of Object.entries(safeEfforts)) {
+    const canonical = canonicalModelId(id);
+    if (canonical === id) continue;
+    if (id === modelId || !Object.hasOwn(safeEfforts, canonical)) safeEfforts[canonical] = effort;
+    delete safeEfforts[id];
+  }
 
   return {
     kind: "valid",
     value: {
       schemaVersion: PREFERENCES_SCHEMA_VERSION,
-      modelId,
+      modelId: selectedId,
       effortByModel: safeEfforts,
       autoApply,
       applyWithNativeMenuOpen: applyWithNativeMenuOpen ?? false,
@@ -146,13 +158,19 @@ export function readCapabilities(raw: unknown): StoredValue<CapabilitiesCache> {
     return { kind: "invalid", value: emptyCapabilities() };
   }
 
-  const models: ModelCapability[] = [];
+  const originalIds = new Set<string>();
+  const models = new Map<string, ModelCapability>();
   for (const candidate of raw.models) {
     const model = readModelCapability(candidate);
-    if (!model || models.some((existing) => existing.id === model.id)) {
+    if (!model || originalIds.has(model.id)) {
       return { kind: "invalid", value: emptyCapabilities() };
     }
-    models.push(model);
+    originalIds.add(model.id);
+    const id = canonicalModelId(model.id);
+    const previous = models.get(id);
+    const normalized = id === model.id ? model : { ...model, id, label: id.slice("label:".length) };
+    // The notice-bearing observation is newer than the original entry when both exist.
+    models.set(id, previous && id === model.id ? mergeModel(normalized, previous) : mergeModel(previous, normalized));
   }
 
   return {
@@ -163,7 +181,7 @@ export function readCapabilities(raw: unknown): StoredValue<CapabilitiesCache> {
       // Older caches used complete/partial/unknown. Keep the field for storage
       // compatibility, but normalize every value to the single retained state.
       completeness: "partial",
-      models,
+      models: [...models.values()],
       lastSuccessfulReadAt: raw.lastSuccessfulReadAt
     }
   };

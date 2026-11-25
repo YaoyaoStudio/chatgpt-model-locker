@@ -85,11 +85,12 @@ const MODE_CONTROL_SELECTOR = '[role="checkbox"], [role="radio"], [role="tab"], 
 export class ChatGPTAdapter {
   readonly document: Document;
   menuReadinessDiagnostic = "not-started";
+  modelReadinessDiagnostic = "not-started";
   private readonly isHitTestable: (element: HTMLElement) => boolean;
 
   constructor(document: Document, options: AdapterOptions = {}) {
     this.document = document;
-    this.isHitTestable = options.isHitTestable ?? ((element) => isTopmostAtCenter(element, document));
+    this.isHitTestable = options.isHitTestable ?? ((element) => hasUnobstructedPoint(element, document));
   }
 
   /** Cheap local filtering; portal discovery scans only newly added/removed subtrees. */
@@ -281,9 +282,15 @@ export class ChatGPTAdapter {
     const ambiguousIds = new Set<string>();
 
     for (const element of elements) {
-      const label = normalizeDisplayName(element.innerText || element.textContent || "");
-      if (!label) continue;
-      const id = modelIdFromDisplayName(label);
+      const names = element.querySelectorAll(
+        ':scope > [data-menu-row-content="true"] > span.truncate, ' +
+        ':scope > [data-menu-row-content="true"] > div.flex-col > span.truncate:first-child'
+      );
+      const text = normalizeDisplayName((names.length === 1 ? names[0].textContent : null) ||
+        element.innerText || element.textContent || "");
+      if (!text) continue;
+      const id = modelIdFromDisplayName(text);
+      const label = id.slice("label:".length);
       if (ids.has(id)) {
         ambiguousIds.add(id);
         continue;
@@ -319,6 +326,11 @@ export class ChatGPTAdapter {
   currentModel(menu: HTMLElement): ModelMenuOption | null {
     const options = this.readModelOptions(menu);
     const selected = options.filter((option) => option.selected === true);
+    return selected.length === 1 ? selected[0] : null;
+  }
+
+  currentEffortModel(menu: HTMLElement): ModelMenuOption | null {
+    const selected = this.readRetainedModelOptions(menu).filter((option) => option.selected === true);
     return selected.length === 1 ? selected[0] : null;
   }
 
@@ -476,6 +488,54 @@ export class ChatGPTAdapter {
       }
       // Native portal animation can start after initial readiness was confirmed.
       // Keep the same bounded task; never click through a temporarily hidden view.
+      await nextFrame(this.document);
+    }
+    return false;
+  }
+
+  async waitForModelOptions(
+    menu: HTMLElement, targetId: string, guard: InteractionGuard, timeoutMs: number
+  ): Promise<ModelMenuOption[]> {
+    const started = Date.now();
+    this.modelReadinessDiagnostic = "model-list-opening";
+    if (!await this.showModelList(menu, guard, timeoutMs)) {
+      this.modelReadinessDiagnostic = "model-list-not-ready;elapsed:" + (Date.now() - started);
+      return [];
+    }
+    let options: ModelMenuOption[] = [];
+    let menuGaps = 0;
+    let mountedTarget = false;
+    let revealedTarget = false;
+    while (guard.isCurrent() && Date.now() - started <= timeoutMs) {
+      const current = this.findMenu();
+      if (current && this.menuView(current) === "models") {
+        const visible = this.extractModelOptions(current, false);
+        if (visible.length) options = visible;
+        const candidate = this.extractModelOptions(current, true).find((option) => option.id === targetId);
+        if (candidate && visible.some((option) => option.id === targetId)) {
+          this.modelReadinessDiagnostic = "target-found;elapsed:" + (Date.now() - started) + ";menu-gaps:" + menuGaps;
+          return visible;
+        }
+        if (candidate) {
+          mountedTarget = true;
+          if (!revealedTarget && candidate.availability === "available" && isDomVisible(candidate.element) &&
+            current.scrollHeight > current.clientHeight) {
+            revealedTarget = true;
+            candidate.element.scrollIntoView({ block: "nearest", inline: "nearest" });
+          }
+        }
+      } else if (!current) menuGaps += 1;
+      await nextFrame(this.document);
+    }
+    this.modelReadinessDiagnostic = "target-not-found;visible-rows:" + options.length +
+      ";mounted-target:" + mountedTarget + ";menu-gaps:" + menuGaps + ";elapsed:" + (Date.now() - started);
+    return options;
+  }
+
+  async waitForEffortModel(menu: HTMLElement, targetId: string, guard: InteractionGuard, timeoutMs: number): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (guard.isCurrent() && Date.now() <= deadline) {
+      if (this.currentEffortModel(menu)?.id === targetId) return true;
       await nextFrame(this.document);
     }
     return false;
@@ -685,7 +745,6 @@ export class ChatGPTAdapter {
     let ready = false;
     while (guard.isCurrent() && Date.now() - started <= timeoutMs) {
       menu = this.liveMenu(menu);
-      if (!menu.isConnected) return false;
       if (this.menuView(menu) === expected) {
         if (ready) return true;
         ready = true;
@@ -715,7 +774,7 @@ export class ChatGPTAdapter {
   }
 
   private liveMenu(menu: HTMLElement): HTMLElement {
-    return menu.isConnected ? menu : this.findMenu() ?? menu;
+    return this.findMenu() ?? menu;
   }
 }
 
@@ -776,12 +835,17 @@ function isDomVisible(element: HTMLElement): boolean {
   return true;
 }
 
-function isTopmostAtCenter(element: HTMLElement, document: Document): boolean {
+function hasUnobstructedPoint(element: HTMLElement, document: Document): boolean {
   if (!isDomVisible(element)) return false;
   const rect = element.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return false;
-  const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
-  return Boolean(hit && (hit === element || element.contains(hit)));
+  const x = rect.left + rect.width / 2;
+  // Model rows can be partly visible while the native list is expanding.
+  const positions = element.matches('[role="menuitemradio"]') ? [0.5, 0.2, 0.8] : [0.5];
+  return positions.some((position) => {
+    const hit = document.elementFromPoint(x, rect.top + rect.height * position);
+    return Boolean(hit && element.contains(hit));
+  });
 }
 
 function toFiniteInt(value: string | null): number | null {

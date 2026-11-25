@@ -17,7 +17,7 @@ async function until(check, diagnose = () => ({}), timeoutMs = 7000) {
   }
 }
 
-function fixture(cached = false, openingDelay = 0, initialPreferences = null, path = "/", { replaceOnFocus = false, replaceTrigger = false, deferOutsideClose = false, timelineHistory = false, retainedPage = false, ignoredOpeningClicks = 0, initialNativeModel = "GPT-6", restoreFailures = 0, unreadableRestoration = false } = {}) {
+function fixture(cached = false, openingDelay = 0, initialPreferences = null, path = "/", { replaceOnFocus = false, replaceTrigger = false, deferOutsideClose = false, timelineHistory = false, retainedPage = false, ignoredOpeningClicks = 0, initialNativeModel = "GPT-6", restoreFailures = 0, unreadableRestoration = false, legacyModelScenario } = {}) {
   const dom = new JSDOM('<!doctype html><html lang="zh-CN"><body><main><h1>随时可以开始。</h1>' +
     '<div role="textbox" contenteditable="true" aria-label="询问 ChatGPT"></div>' +
     '<button id="trigger" aria-label="选择 ChatGPT 模型" aria-haspopup="menu" aria-expanded="false" aria-controls="native-menu"></button>' +
@@ -44,6 +44,12 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
       efforts: levels.map((label, order) => ({ id: `label:${label}`, label, order, ordering: "strength", disabled: false })) }]
   } } : {};
   if (initialPreferences) state.preferences = initialPreferences;
+  if (legacyModelScenario) {
+    const old = state.chatCapabilities.models[0];
+    for (const label of ["GPT-5.6 Sol", "GPT-5.6 Sol 将于 12月23日 下线"]) {
+      state.chatCapabilities.models.push({ ...old, id: "label:" + label, label });
+    }
+  }
   if (path.startsWith("/c/")) {
     const message = document.createElement(timelineHistory ? "div" : "article");
     if (timelineHistory) {
@@ -73,6 +79,7 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
   } };
   let trigger = document.querySelector("#trigger");
   let view = "effort";
+  let modelListShownAt = 0;
   const native = () => document.querySelector("#native-menu");
   const close = () => { native()?.remove(); trigger.setAttribute("aria-expanded", "false"); };
   const update = () => {
@@ -80,7 +87,11 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
     native().querySelector("[role=slider]").setAttribute("aria-valuenow", String(level));
     native().querySelector("[role=status]").textContent = `${levels[level]}，第 ${level + 1} 项，共 3 项。 使用左右方向键调整强度`;
   };
-  const setView = (next) => { view = next; native().setAttribute("data-view", next); };
+  const setView = (next) => {
+    view = next;
+    if (next === "models") modelListShownAt = Date.now();
+    native().setAttribute("data-view", next);
+  };
   const handleTriggerKey = (event) => { if (event.key === "Escape") close(); };
   const handleTriggerClick = () => {
     clicks += 1;
@@ -104,10 +115,28 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
       modelNames.map((label) => `<div role="menuitemradio" aria-checked="${label === currentModel}">${label}</div>`).join("") +
       '<div role="menuitem" data-reasoning-slider="true" aria-label="强度" tabindex="0">' +
       '<span role="slider" aria-valuemin="0" aria-valuemax="2" aria-valuenow="1"></span></div><div role="status"></div>';
-    menu.querySelector('[aria-label="选择模型"]').addEventListener("click", () => { clicks += 1; setView("models"); });
+    if (legacyModelScenario && legacyModelScenario !== "missing") {
+      const row = document.createElement("div");
+      row.setAttribute("role", "menuitemradio");
+      row.setAttribute("aria-checked", "false");
+      if (legacyModelScenario === "disabled") row.setAttribute("aria-disabled", "true");
+      row.dataset.modelName = "GPT-5.6 Sol";
+      row.innerHTML = '<div data-menu-row-content="true"><div class="flex-col"><span class="truncate">GPT-5.6 Sol</span><span class="text-tertiary">将于 12月24日 下线</span></div></div>';
+      menu.insertBefore(row, menu.querySelector("[data-reasoning-slider]"));
+    }
+    menu.querySelector('[aria-label="选择模型"]').addEventListener("click", () => {
+      clicks += 1;
+      setView("models");
+      if (legacyModelScenario === "delayed") {
+        // The associated portal can disappear briefly while the last model row is still clipped.
+        window.setTimeout(() => trigger.removeAttribute("aria-controls"), 65);
+        window.setTimeout(() => trigger.setAttribute("aria-controls", "native-menu"), 120);
+      }
+    });
     menu.querySelectorAll("[role=menuitemradio]").forEach((option) => option.addEventListener("click", () => {
       clicks += 1;
-      currentModel = option.textContent;
+      if (option.dataset.modelName && legacyModelScenario === "ignored") return;
+      currentModel = option.dataset.modelName ?? option.textContent;
       menu.querySelectorAll("[role=menuitemradio]").forEach((row) => row.setAttribute("aria-checked", String(row === option)));
       setView("effort");
     }));
@@ -148,7 +177,13 @@ function fixture(cached = false, openingDelay = 0, initialPreferences = null, pa
     const left = Math.max(0, items.indexOf(this)) * 200;
     return { x: left, y: 0, left, top: 0, right: left + (hidden ? 0 : 100), bottom: hidden ? 0 : 20, width: hidden ? 0 : 100, height: hidden ? 0 : 20 };
   };
-  document.elementFromPoint = (x) => native()?.querySelectorAll('[role^="menuitem"]')[Math.floor(x / 200)] ?? trigger;
+  document.elementFromPoint = (x, y) => {
+    const element = native()?.querySelectorAll('[role^="menuitem"]')[Math.floor(x / 200)];
+    if (legacyModelScenario === "delayed" && view === "models" && element?.dataset.modelName &&
+      Date.now() - modelListShownAt < 200) return trigger;
+    if (legacyModelScenario === "partially-visible" && view === "models" && element?.dataset.modelName && y > 5) return trigger;
+    return element ?? trigger;
+  };
   if (retainedPage) {
     const retained = document.createElement("div");
     retained.style.setProperty("display", "none", "important");
@@ -329,6 +364,33 @@ test("controller waits for animated controls, preserves model-only feedback, and
 });
 
 const highPreference = { schemaVersion: 1, modelId: "label:GPT-6", effortByModel: { "label:GPT-6": "label:High" }, autoApply: true };
+
+test("applies legacy model preferences after the target is clickable and leaves other models' effort unchanged on failure", async (t) => {
+  const canonical = "label:GPT-5.6 Sol";
+  const legacy = canonical + " 将于 12月23日 下线";
+  for (const [scenario, message] of [
+    ["delayed", "applySuccess"], ["partially-visible", "applySuccess"], ["missing", "applyUnavailable"],
+    ["disabled", "applyModelDisabled"], ["ignored", "applyModelUnconfirmed"]
+  ]) await t.test(scenario, async () => {
+    const prefs = { ...highPreference, modelId: legacy, autoApply: false, effortByModel: {
+      [canonical]: "label:Instant", [legacy]: "label:High"
+    } };
+    const f = fixture(true, 0, prefs, "/", { initialNativeModel: "GPT-6.2", legacyModelScenario: scenario });
+    try {
+      await pause(350);
+      f.shadow.querySelector("[data-role=bubble]").click();
+      const select = f.shadow.querySelector("#default-model-select");
+      assert.equal(select.value, canonical);
+      assert.deepEqual([...select.options].filter((option) => option.value.startsWith(canonical)).map((option) => option.value), [canonical]);
+      assert.equal(f.shadow.querySelector("[data-role=effort-value]").textContent, "High");
+      f.shadow.querySelector("[data-role=settings-entry]").click();
+      f.shadow.querySelector("[data-action=apply]").click();
+      await until(() => f.shadow.querySelector("[data-role=status]").textContent.startsWith(MESSAGES.en[message]));
+      assert.equal(f.model, message === "applySuccess" ? "GPT-5.6 Sol" : "GPT-6.2");
+      assert.equal(f.level, message === "applySuccess" ? 2 : 1);
+    } finally { f.close(); }
+  });
+});
 
 test("pushState history navigation is detected when only messages change and composer controls are retained", async (t) => {
   for (const replaceContainer of [false, true]) await t.test(replaceContainer ? "container under wrapper" : "container contents", async () => {

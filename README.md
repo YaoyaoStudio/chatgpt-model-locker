@@ -5,7 +5,7 @@
   <h1>GPT Model Locker</h1>
   <p><strong>Keep your preferred model selected whenever you open ChatGPT</strong></p>
   <p>
-    <a href="#development"><img src="https://img.shields.io/badge/Version-v0.1.0-8952EE?style=flat-square" alt="Version v0.1.0"></a>
+    <a href="#development"><img src="https://img.shields.io/badge/Version-v0.1.2-8952EE?style=flat-square" alt="Version v0.1.2"></a>
     <a href="#compatibility"><img src="https://img.shields.io/badge/Browsers-Chrome%20%26%20Edge-3A83F7?style=flat-square" alt="Supports Chrome and Edge"></a>
     <a href="#privacy"><img src="https://img.shields.io/badge/Data-Stored%20locally-238636?style=flat-square" alt="Data stored locally"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-64748B?style=flat-square" alt="MIT License"></a>
@@ -153,7 +153,7 @@ npm run build
 | `npm run check` | Runs TypeScript type checking. |
 | `npm test` | Runs automated tests. |
 | `npm run build` | Runs type checking and builds the extension into `dist/`, ready to load in the browser. |
-| `npm run package` | Rebuilds the extension and creates `release/chatgpt-model-effort-<version>.zip`. |
+| `npm run package` | Rebuilds the extension and creates `release/chatgpt-model-locker-<version>.zip`. |
 
 The build output directories, `dist/` and `release/`, are not committed to source control. The installation ZIP contains `manifest.json` at the archive root.
 

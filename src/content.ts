@@ -104,7 +104,7 @@ class ExtensionController {
 
   constructor() {
     this.host.id = "chatgpt-default-model-effort-host";
-    this.host.dataset.build = "20261103-confirm-effort-restoration";
+    this.host.dataset.build = "20261125-reveal-target-model";
     this.host.style.display = "none";
     this.host.style.position = "fixed";
     this.host.style.zIndex = "2147483647";
@@ -1654,8 +1654,6 @@ class ExtensionController {
       return false;
     }
 
-    // Each stage is best effort. Missing confirmation does not gate the next stage,
-    // and this operation never schedules another whole application attempt.
     const attempt = async <T>(action: () => T | Promise<T>): Promise<T | null> => {
       if (!context.isCurrent()) return null;
       try {
@@ -1668,10 +1666,16 @@ class ExtensionController {
     try {
       const targetId = this.preferences.modelId;
       this.host.dataset.step = "read-model-list";
-      await attempt(() => this.adapter.showModelList(menu, context));
+      const listed = await attempt(() => this.adapter.waitForModelOptions(menu, targetId, context, REFRESH_TIMEOUT_MS)) ?? [];
       if (!context.isCurrent()) return false;
-      const listing = await attempt(() => this.adapter.readModelOptions(menu));
-      const listed = listing ?? [];
+      this.host.dataset.modelReadiness = this.adapter.modelReadinessDiagnostic;
+      const targetOption = listed.find((option) => option.id === targetId);
+      if (targetOption?.availability === "available") {
+        this.host.dataset.step = "select-model";
+        // Activate the target once from the fresh list, even when it is already selected,
+        // since activating its row also returns the menu to the strength control.
+        await attempt(() => targetOption.element.click());
+      }
       if (listed.length > 0) {
         const observed = await attempt(() => mergeAndSaveCapabilities({
           scopeKey: this.adapter.scopeKey(),
@@ -1681,26 +1685,34 @@ class ExtensionController {
         if (!context.isCurrent()) return false;
         if (observed) this.capabilities = observed;
       }
-      const targetOption = listed.find((option) => option.id === targetId && option.availability === "available");
-      let cached = this.getCurrentCapabilities().models.find((model) => model.id === targetId);
-      const targetLabel = targetOption?.label ?? cached?.label ?? targetId;
-
-      this.host.dataset.step = "select-model";
-      // Issue a single model selection; do not reopen the list to verify the click.
-      if (targetOption && targetOption.selected !== true) await attempt(() => targetOption.element.click());
       if (!context.isCurrent()) return false;
+      if (targetOption?.availability !== "available") {
+        if (listed.length === 0) {
+          this.host.dataset.step = "model-list-not-ready";
+          this.setStatus("warning", "applyNoControls");
+          return false;
+        }
+        this.host.dataset.step = "model-unavailable";
+        this.setStatus("warning", targetOption?.availability === "disabled" ? "applyModelDisabled" : "applyUnavailable");
+        return false;
+      }
+      let cached = this.getCurrentCapabilities().models.find((model) => model.id === targetId);
+      const effortId = this.preferences.effortByModel[targetId] ?? null;
 
       this.host.dataset.step = "read-effort";
-      await attempt(() => this.adapter.showEffortControl(menu, context));
+      const confirmedForEffort = await attempt(() => this.adapter.waitForEffortModel(menu, targetId, context, REFRESH_TIMEOUT_MS));
       if (!context.isCurrent()) return false;
-      const beforeDiscovery = await attempt(() => this.adapter.readRetainedModelOptions(menu));
-      const selectedBeforeDiscovery = beforeDiscovery?.filter((option) => option.selected === true) ?? [];
-      // Unconfirmed model selection must not associate another model's levels with the saved target.
-      // Skip cache discovery in that case, while still attempting the saved effort below.
-      if ((!cached || cached.effortState === "not-read" || cached.effortState === "unknown") && targetOption &&
-        selectedBeforeDiscovery.length === 1 && selectedBeforeDiscovery[0].id === targetId) {
+      if (!confirmedForEffort && (effortId || this.adapter.currentModel(menu)?.id !== targetId)) {
+        this.host.dataset.step = "model-unconfirmed";
+        this.setStatus("warning", "applyModelUnconfirmed");
+        return false;
+      }
+      const modelGuard = {
+        isCurrent: () => context.isCurrent() && this.adapter.currentEffortModel(menu)?.id === targetId
+      };
+      if (confirmedForEffort && (!cached || cached.effortState === "not-read" || cached.effortState === "unknown")) {
         this.host.dataset.step = "discover-efforts";
-        const discovery = await attempt(() => this.adapter.enumerateEfforts(menu, context, REFRESH_TIMEOUT_MS));
+        const discovery = await attempt(() => this.adapter.enumerateEfforts(menu, modelGuard, REFRESH_TIMEOUT_MS));
         if (!context.isCurrent()) return false;
         if (discovery) {
           const merged = await attempt(() => mergeAndSaveCapabilities({
@@ -1716,7 +1728,6 @@ class ExtensionController {
         }
       }
 
-      const effortId = this.preferences.effortByModel[targetId] ?? null;
       const selectedEffort = cached?.efforts.find((effort) => effort.id === effortId && !effort.disabled);
       const fallbackIndex = cached?.efforts.findIndex((effort) => effort.id === effortId);
       const targetIndex = selectedEffort?.ordering === "strength" && selectedEffort.order !== null
@@ -1726,11 +1737,10 @@ class ExtensionController {
           : null;
       if (effortId && targetIndex !== null && targetIndex >= 1) {
         this.host.dataset.step = "set-effort";
-        await attempt(() => this.adapter.setEffortIndex(menu, targetIndex, context, REFRESH_TIMEOUT_MS));
+        await attempt(() => this.adapter.setEffortIndex(menu, targetIndex, modelGuard, REFRESH_TIMEOUT_MS));
       }
       if (!context.isCurrent()) return false;
 
-      // Readback only controls feedback; it never aborts or restarts the sequence.
       const reading = await attempt(() => this.adapter.readEffort(menu));
       const currentListing = await attempt(() => this.adapter.menuView(menu) === "models"
         ? this.adapter.readModelOptions(menu) : this.adapter.readRetainedModelOptions(menu));
@@ -1748,7 +1758,7 @@ class ExtensionController {
         matchesEffortOption(reading, selectedEffort, targetIndex, cached?.efforts.length ?? 0);
       if (modelConfirmed && (!effortId || effortConfirmed)) {
         this.setStatus("success", !effortId ? "applyModelOnly" : "applySuccess",
-          { modelLabel: targetLabel, effortLabel: effortId ? reading!.label : undefined });
+          { modelLabel: targetOption.label, effortLabel: effortId ? reading!.label : undefined });
         this.host.dataset.step = "verified";
       } else {
         this.setStatus("quiet", "applyAttempted");
